@@ -1,6 +1,6 @@
 /**
- * FundAI 薄后端 — Express 服务入口（sql.js 纯 JS 版）
- * 即使数据库失败也会启动，方便排查问题
+ * FundAI 后端 — Express 最小版（JSON 文件存储）
+ * 先确保 Railway 能启动，再逐步加回 SQLite
  */
 try { require('dotenv').config({ path: require('path').join(__dirname, '.env') }); } catch {}
 
@@ -10,70 +10,78 @@ const path = require('path');
 const fs = require('fs');
 
 const PORT = process.env.PORT || 3000;
+const DATA_DIR = path.join(__dirname, '..', 'data');
+const DB_FILE = path.join(DATA_DIR, 'fundai.json');
 
-(async () => {
-  const app = express();
-  app.use(cors());
-  app.use(express.json());
-
-  // 确保 data 目录
-  const dataDir = path.join(__dirname, '..', 'data');
-  try { if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true }); } catch {}
-
-  // ─── 数据库初始化 ────────────────────────────
-  let db = null;
+// ─── JSON 文件数据库 ────────────────────────────
+function readDB() {
   try {
-    const { initDB, saveToDisk } = require('./db/init');
-    db = await initDB();
-    console.log('[Server] ✅ SQLite 就绪');
+    if (!fs.existsSync(DB_FILE)) return {};
+    return JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+  } catch { return {}; }
+}
+function writeDB(data) {
+  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+  fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2));
+}
 
-    // 定期保存 + 优雅退出
-    setInterval(() => { try { saveToDisk(db); } catch {} }, 30_000);
-    const graceful = () => { try { saveToDisk(db); } catch {} process.exit(0); };
-    process.on('SIGTERM', graceful);
-    process.on('SIGINT', graceful);
+// 初始化默认结构
+function getDB() {
+  let db = readDB();
+  if (!db.watchlist) db.watchlist = [];
+  if (!db.positions) db.positions = [];
+  if (!db.settings) db.settings = {};
+  if (!db.preclose) db.preclose = {};
+  if (!db.allocations) db.allocations = [];
+  return db;
+}
 
-    // 定时任务
-    try {
-      const { startScheduler } = require('./scheduler');
-      startScheduler(db);
-      console.log('[Server] ✅ 定时任务已启动');
-    } catch (e) { console.error('[Server] 定时任务失败:', e.message); }
+const db = getDB();
+console.log('[Server] JSON 数据库就绪');
 
-  } catch (e) {
-    console.error('[Server] ⚠ 数据库初始化失败:', e.message);
-    console.error('[Server] 将以无数据库模式运行');
-  }
+// ─── Express ───────────────────────────────────
+const app = express();
+app.use(cors());
+app.use(express.json());
 
-  // ─── 诊断端点 ────────────────────────────────
-  app.get('/api/ping', (req, res) => {
-    res.json({ pong: true, time: Date.now(), dbOk: !!db });
-  });
+// ─── API 路由（只处理 /api，无外部依赖） ──────
+const api = express.Router();
 
-  // ─── API 路由 ────────────────────────────────
-  if (db) {
-    try {
-      const { router, withDB } = require('./routes/api');
-      app.use('/api', withDB(db), router);
-    } catch (e) {
-      console.error('[Server] API 路由加载失败:', e.message);
-      app.use('/api', (req, res) => res.status(500).json({ error: 'API 加载失败: ' + e.message }));
-    }
-  } else {
-    app.use('/api', (req, res) => {
-      res.status(503).json({ error: '数据库未就绪', dbOk: false });
-    });
-  }
+api.get('/ping', (req, res) => {
+  const d = getDB();
+  res.json({ pong: true, time: Date.now(), fundCount: d.watchlist.length });
+});
 
-  // 静态文件由 Railway 内置 fileserver 处理，Express 只负责 /api/*
+api.get('/funds', (req, res) => {
+  res.json({ success: true, data: getDB().watchlist });
+});
 
-  // ─── 启动 ────────────────────────────────────
-  app.listen(PORT, () => {
-    console.log(`[Server] 🚀 FundAI 启动 → http://localhost:${PORT}`);
-    console.log(`[Server] DB: ${db ? '✅' : '❌'}  DeepSeek: ${process.env.DEEPSEEK_API_KEY ? '✅' : '⚠'}`);
-  });
+api.get('/allocations', (req, res) => {
+  res.json({ success: true, data: getDB().allocations });
+});
 
-})().catch(e => {
-  console.error('[Server] 💥 致命错误:', e.message);
-  console.error(e.stack);
+api.post('/allocations', (req, res) => {
+  const d = getDB();
+  d.allocations = req.body.allocations || [];
+  writeDB(d);
+  res.json({ success: true });
+});
+
+api.get('/preclose', (req, res) => {
+  const d = getDB();
+  const today = new Date().toISOString().slice(0, 10);
+  res.json({ success: true, data: d.preclose[today] || null });
+});
+
+api.get('/health', (req, res) => {
+  const d = getDB();
+  res.json({ success: true, status: 'ok', fundCount: d.watchlist.length });
+});
+
+app.use('/api', api);
+
+// ─── 启动 ──────────────────────────────────────
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`[Server] 🚀 FundAI 启动 → port ${PORT}`);
+  console.log(`[Server] DeepSeek: ${process.env.DEEPSEEK_API_KEY ? '✅' : '⚠'}`);
 });

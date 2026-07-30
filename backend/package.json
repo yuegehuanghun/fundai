@@ -9,9 +9,7 @@
     "db:init": "node db/init.js"
   },
   "dependencies": {
-    "sql.js": "^1.10.3",
     "express": "^4.21.0",
-    "node-cron": "^3.0.3",
     "dotenv": "^16.4.0",
     "cors": "^2.8.5"
   },

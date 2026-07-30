@@ -1,11 +1,9 @@
 {
   "build": {
-    "builder": "NIXPACKS",
-    "buildCommand": "npm install"
+    "builder": "NIXPACKS"
   },
   "deploy": {
     "startCommand": "node server.js",
-    "healthcheckPath": "/api/ping",
     "restartPolicyType": "ON_FAILURE"
   }
 }
