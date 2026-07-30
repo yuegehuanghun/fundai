@@ -5,7 +5,7 @@
   },
   "deploy": {
     "startCommand": "node server.js",
-    "healthcheckPath": "/api/health",
+    "healthcheckPath": "/api/ping",
     "restartPolicyType": "ON_FAILURE"
   }
 }
