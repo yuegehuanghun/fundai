@@ -65,16 +65,7 @@ const PORT = process.env.PORT || 3000;
     });
   }
 
-  // ─── 静态文件 ────────────────────────────────
-  app.use(express.static(path.join(__dirname, '..')));
-
-  // ─── SPA ─────────────────────────────────────
-  app.get('*', (req, res) => {
-    if (req.path.startsWith('/api')) return;
-    res.sendFile(path.join(__dirname, '..', 'index.html'), (err) => {
-      if (err) res.status(404).send('Not found');
-    });
-  });
+  // 静态文件由 Railway 内置 fileserver 处理，Express 只负责 /api/*
 
   // ─── 启动 ────────────────────────────────────
   app.listen(PORT, () => {
