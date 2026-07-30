@@ -1,252 +1,229 @@
 /**
- * 数据库查询封装 — 每个函数接收 db 实例作为第一参数
- * 所有写操作使用 db.prepare().run()，读操作使用 .all() 或 .get()
+ * 数据库查询封装 — 基于 sql.js（纯 JS，无原生依赖）
+ * sql.js stmt.bind/getAsObject 提供与 better-sqlite3 类似的接口
  */
-const crypto = require('crypto');
 
-// ==================== Watchlist ====================
+// ── 工具函数 ──────────────────────────────────────
+function _queryAll(db, sql, params = []) {
+  try {
+    const stmt = db.prepare(sql);
+    if (params.length) stmt.bind(params);
+    const rows = [];
+    while (stmt.step()) rows.push(stmt.getAsObject());
+    stmt.free();
+    return rows;
+  } catch (e) { console.error('[DB] queryAll error:', e.message, sql.slice(0, 80)); return []; }
+}
+
+function _queryOne(db, sql, params = []) {
+  const rows = _queryAll(db, sql, params);
+  return rows.length > 0 ? rows[0] : null;
+}
+
+function _execute(db, sql, params = []) {
+  try {
+    db.run(sql, params);
+    return true;
+  } catch (e) { console.error('[DB] execute error:', e.message, sql.slice(0, 80)); return false; }
+}
+
+// ── Watchlist ──────────────────────────────────────
 const watchlist = {
-  all: (db) => db.prepare('SELECT * FROM watchlist ORDER BY added_at ASC').all(),
-  get: (db, code) => db.prepare('SELECT * FROM watchlist WHERE code = ?').get(code),
+  all: (db) => _queryAll(db, 'SELECT * FROM watchlist ORDER BY added_at ASC'),
+  get: (db, code) => _queryOne(db, 'SELECT * FROM watchlist WHERE code = ?', [code]),
   upsert: (db, { code, name }) => {
-    const addedAt = Date.now();
-    db.prepare(`INSERT INTO watchlist (code, name, added_at) VALUES (?, ?, ?)
-      ON CONFLICT(code) DO UPDATE SET name = excluded.name`).run(code, name, addedAt);
+    _execute(db, 'INSERT OR REPLACE INTO watchlist (code, name, added_at) VALUES (?, ?, ?)',
+      [code, name || '', Date.now()]);
   },
-  remove: (db, code) => db.prepare('DELETE FROM watchlist WHERE code = ?').run(code)
+  remove: (db, code) => _execute(db, 'DELETE FROM watchlist WHERE code = ?', [code])
 };
 
-// ==================== Positions ====================
+// ── Positions ─────────────────────────────────────
 const positions = {
-  all: (db) => db.prepare('SELECT * FROM positions').all(),
-  get: (db, code) => db.prepare('SELECT * FROM positions WHERE code = ?').get(code),
+  all: (db) => _queryAll(db, 'SELECT * FROM positions'),
+  get: (db, code) => _queryOne(db, 'SELECT * FROM positions WHERE code = ?', [code]),
   upsert: (db, { code, shares, costPrice, totalInvested }) => {
-    db.prepare(`INSERT INTO positions (code, shares, cost_price, total_invested, updated_at)
-      VALUES (?, ?, ?, ?, ?)
-      ON CONFLICT(code) DO UPDATE SET shares=excluded.shares, cost_price=excluded.cost_price,
-      total_invested=excluded.total_invested, updated_at=excluded.updated_at`)
-      .run(code, shares, costPrice, totalInvested, Date.now());
+    _execute(db, `INSERT OR REPLACE INTO positions (code, shares, cost_price, total_invested, updated_at)
+      VALUES (?, ?, ?, ?, ?)`,
+      [code, shares || 0, costPrice || 0, totalInvested || 0, Date.now()]);
   },
-  remove: (db, code) => db.prepare('DELETE FROM positions WHERE code = ?').run(code)
+  remove: (db, code) => _execute(db, 'DELETE FROM positions WHERE code = ?', [code])
 };
 
-// ==================== Market Cache ====================
+// ── Market Cache ──────────────────────────────────
 const marketCache = {
-  all: (db) => db.prepare('SELECT * FROM market_cache').all(),
-  get: (db, code) => db.prepare('SELECT * FROM market_cache WHERE code = ?').get(code),
+  all: (db) => _queryAll(db, 'SELECT * FROM market_cache'),
+  get: (db, code) => _queryOne(db, 'SELECT * FROM market_cache WHERE code = ?', [code]),
   upsertAll: (db, items) => {
-    const stmt = db.prepare(`INSERT INTO market_cache
-      (code, name, nav, nav_close, estimate_nav, change_pct, estimate_time, nav_date,
-       nav_freshness, is_today_nav, valuation_percentile, recent_navs_json, news_json,
-       news_sentiment, source, update_time)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(code) DO UPDATE SET
-        name=excluded.name, nav=excluded.nav, nav_close=excluded.nav_close,
-        estimate_nav=excluded.estimate_nav, change_pct=excluded.change_pct,
-        estimate_time=excluded.estimate_time, nav_date=excluded.nav_date,
-        nav_freshness=excluded.nav_freshness, is_today_nav=excluded.is_today_nav,
-        valuation_percentile=excluded.valuation_percentile,
-        recent_navs_json=excluded.recent_navs_json, news_json=excluded.news_json,
-        news_sentiment=excluded.news_sentiment, source=excluded.source,
-        update_time=excluded.update_time`);
-    const now = Date.now();
-    const insertMany = db.transaction((rows) => {
-      for (const item of rows) {
-        stmt.run(
-          item.code, item.name || '', item.nav || 0, item.navClose || 0, item.estimateNav || 0,
-          item.changePct || 0, item.estimateTime || '', item.navDate || '',
-          item.navFreshness || 'close', item.isTodayNav ? 1 : 0,
-          item.valuationPercentile != null ? item.valuationPercentile : null,
-          JSON.stringify(item.recentNAVs || []), JSON.stringify(item.news || []),
-          item.newsSentiment != null ? item.newsSentiment : 50,
-          item.source || 'unknown', now
-        );
-      }
-    });
-    insertMany(items);
+    for (const item of items) {
+      _execute(db, `INSERT OR REPLACE INTO market_cache
+        (code, name, nav, nav_close, estimate_nav, change_pct, estimate_time, nav_date,
+         nav_freshness, is_today_nav, valuation_percentile, recent_navs_json, news_json,
+         news_sentiment, source, update_time)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [item.code, item.name || '', item.nav || 0, item.navClose || 0, item.estimateNav || 0,
+         item.changePct || 0, item.estimateTime || '', item.navDate || '',
+         item.navFreshness || 'close', item.isTodayNav ? 1 : 0,
+         item.valuationPercentile != null ? item.valuationPercentile : null,
+         JSON.stringify(item.recentNAVs || []), JSON.stringify(item.news || []),
+         item.newsSentiment != null ? item.newsSentiment : 50,
+         item.source || 'unknown', Date.now()]);
+    }
   }
 };
 
-// ==================== AI Calc Log (净值快照) ====================
+// ── AI Calc Log ───────────────────────────────────
 const aiCalcLog = {
-  all: (db) => db.prepare('SELECT * FROM ai_calc_log').all(),
-  byCode: (db, code) => db.prepare('SELECT * FROM ai_calc_log WHERE code = ? ORDER BY date DESC').all(code),
-  byDate: (db, date) => db.prepare('SELECT * FROM ai_calc_log WHERE date = ?').all(date),
-  get: (db, date, code) => db.prepare('SELECT * FROM ai_calc_log WHERE id = ?').get(`${date}_${code}`),
+  all: (db) => _queryAll(db, 'SELECT * FROM ai_calc_log'),
+  byCode: (db, code) => _queryAll(db, 'SELECT * FROM ai_calc_log WHERE code = ? ORDER BY date DESC', [code]),
+  byDate: (db, date) => _queryAll(db, 'SELECT * FROM ai_calc_log WHERE date = ?', [date]),
+  get: (db, date, code) => _queryOne(db, 'SELECT * FROM ai_calc_log WHERE id = ?', [`${date}_${code}`]),
   upsert: (db, entry) => {
-    db.prepare(`INSERT INTO ai_calc_log (id, date, code, nav, nav_date, shares, nav_source, source, daily_pnl, daily_pct)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET nav=excluded.nav, nav_date=excluded.nav_date,
-      shares=excluded.shares, nav_source=excluded.nav_source, source=excluded.source,
-      daily_pnl=excluded.daily_pnl, daily_pct=excluded.daily_pct`)
-      .run(`${entry.date}_${entry.code}`, entry.date, entry.code, entry.nav, entry.navDate,
-        entry.shares || 0, entry.navSource || 'nav', entry.source || '',
-        entry.dailyPnL || 0, entry.dailyPct || 0);
+    _execute(db, `INSERT OR REPLACE INTO ai_calc_log (id, date, code, nav, nav_date, shares, nav_source, source, daily_pnl, daily_pct)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [`${entry.date}_${entry.code}`, entry.date, entry.code, entry.nav, entry.navDate,
+       entry.shares || 0, entry.navSource || 'nav', entry.source || '', entry.dailyPnL || 0, entry.dailyPct || 0]);
   }
 };
 
-// ==================== AI Decisions ====================
+// ── AI Decisions ──────────────────────────────────
 const aiDecisions = {
-  byDate: (db, date) => db.prepare('SELECT * FROM ai_decisions WHERE date = ?').all(date),
-  byDateCode: (db, date, code) => db.prepare('SELECT * FROM ai_decisions WHERE date = ? AND code = ?').get(date, code),
+  byDate: (db, date) => _queryAll(db, 'SELECT * FROM ai_decisions WHERE date = ?', [date]),
+  byDateCode: (db, date, code) => _queryOne(db, 'SELECT * FROM ai_decisions WHERE date = ? AND code = ?', [date, code]),
   upsertAll: (db, decisions) => {
-    const stmt = db.prepare(`INSERT INTO ai_decisions
-      (date, code, name, timestamp, valuation_score, profit_loss_score, trend_score, news_score,
-       total_score, buy_pct, hold_pct, sell_pct, recommendation, action, valuation_percentile,
-       profit_pct, change_pct, news_summary, nav, missing_dims_json, degraded, highlight, notify)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(date, code) DO UPDATE SET
-        name=excluded.name, buy_pct=excluded.buy_pct, hold_pct=excluded.hold_pct,
-        sell_pct=excluded.sell_pct, recommendation=excluded.recommendation, action=excluded.action`);
     const now = Date.now();
-    const insertMany = db.transaction((rows) => {
-      for (const d of rows) {
-        stmt.run(d.date, d.code, d.name || '', now,
-          d.scores?.valuation || 0, d.scores?.profitLoss || 0, d.scores?.trend || 0, d.scores?.news || 0,
-          d.scores?.total || 0, d.buyPct || 0, d.holdPct || 0, d.sellPct || 0,
-          d.recommendation || '', d.action || 'hold', d.valuationPercentile,
-          d.profitPct || 0, d.changePct || 0, d.newsSummary || '', d.nav || 0,
-          JSON.stringify(d.missingDims || []), d.degraded ? 1 : 0, d.highlight ? 1 : 0, d.notify ? 1 : 0);
-      }
-    });
-    insertMany(decisions);
+    for (const d of decisions) {
+      _execute(db, `INSERT OR REPLACE INTO ai_decisions
+        (date, code, name, timestamp, valuation_score, profit_loss_score, trend_score, news_score,
+         total_score, buy_pct, hold_pct, sell_pct, recommendation, action, valuation_percentile,
+         profit_pct, change_pct, news_summary, nav, missing_dims_json, degraded, highlight, notify)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [d.date, d.code, d.name || '', now,
+         (d.scores && d.scores.valuation) || 0, (d.scores && d.scores.profitLoss) || 0,
+         (d.scores && d.scores.trend) || 0, (d.scores && d.scores.news) || 0,
+         (d.scores && d.scores.total) || 0, d.buyPct || 0, d.holdPct || 0, d.sellPct || 0,
+         d.recommendation || '', d.action || 'hold', d.valuationPercentile,
+         d.profitPct || 0, d.changePct || 0, d.newsSummary || '', d.nav || 0,
+         JSON.stringify(d.missingDims || []), d.degraded ? 1 : 0,
+         d.highlight ? 1 : 0, d.notify ? 1 : 0]);
+    }
   }
 };
 
-// ==================== Monthly Budget ====================
+// ── Monthly Budget ────────────────────────────────
 const monthlyBudget = {
   getCurrent: (db) => {
     const now = new Date();
     const ym = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-    let row = db.prepare('SELECT * FROM monthly_budget WHERE year_month = ?').get(ym);
+    let row = _queryOne(db, 'SELECT * FROM monthly_budget WHERE year_month = ?', [ym]);
     if (!row) {
-      db.prepare(`INSERT INTO monthly_budget (year_month, total_budget, used_amount, remaining_amount, max_daily_pct)
-        VALUES (?, 0, 0, 0, 30)`).run(ym);
-      row = db.prepare('SELECT * FROM monthly_budget WHERE year_month = ?').get(ym);
+      _execute(db, 'INSERT INTO monthly_budget (year_month, total_budget, used_amount, remaining_amount, max_daily_pct) VALUES (?, 0, 0, 0, 30)', [ym]);
+      row = _queryOne(db, 'SELECT * FROM monthly_budget WHERE year_month = ?', [ym]) || {};
     }
-    return {
-      yearMonth: row.year_month,
-      totalBudget: row.total_budget,
-      usedAmount: row.used_amount,
-      remainingAmount: row.remaining_amount,
-      maxDailyPct: row.max_daily_pct
-    };
+    return { yearMonth: row.year_month, totalBudget: row.total_budget, usedAmount: row.used_amount,
+      remainingAmount: row.remaining_amount, maxDailyPct: row.max_daily_pct };
   },
   setBudget: (db, total, pct) => {
     const now = new Date();
     const ym = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-    db.prepare(`INSERT INTO monthly_budget (year_month, total_budget, max_daily_pct, used_amount, remaining_amount)
-      VALUES (?, ?, ?, 0, ?) ON CONFLICT(year_month) DO UPDATE SET
-      total_budget=excluded.total_budget, max_daily_pct=excluded.max_daily_pct`)
-      .run(ym, total, pct, total);
+    _execute(db, `INSERT OR REPLACE INTO monthly_budget (year_month, total_budget, max_daily_pct, used_amount, remaining_amount)
+      VALUES (?, ?, ?, COALESCE((SELECT used_amount FROM monthly_budget WHERE year_month = ?), 0), ?)`,
+      [ym, total, pct, ym, total]);
   },
   recordUsage: (db, amount) => {
     const now = new Date();
     const ym = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-    const row = db.prepare('SELECT * FROM monthly_budget WHERE year_month = ?').get(ym);
+    const row = _queryOne(db, 'SELECT * FROM monthly_budget WHERE year_month = ?', [ym]);
     if (!row) return;
-    const newUsed = (row.used_amount || 0) + amount;
-    db.prepare('UPDATE monthly_budget SET used_amount = ?, remaining_amount = total_budget - ? WHERE year_month = ?')
-      .run(newUsed, newUsed, ym);
+    const nu = (row.used_amount || 0) + amount;
+    _execute(db, 'UPDATE monthly_budget SET used_amount = ?, remaining_amount = total_budget - ? WHERE year_month = ?', [nu, nu, ym]);
   }
 };
 
-// ==================== Operation Log ====================
+// ── Operation Log ─────────────────────────────────
 const operationLog = {
-  all: (db) => db.prepare('SELECT * FROM operation_log ORDER BY date DESC, id DESC').all(),
-  byCode: (db, code) => db.prepare('SELECT * FROM operation_log WHERE code = ? ORDER BY date ASC, id ASC').all(code),
+  all: (db) => _queryAll(db, 'SELECT * FROM operation_log ORDER BY date DESC, id DESC'),
+  byCode: (db, code) => _queryAll(db, 'SELECT * FROM operation_log WHERE code = ? ORDER BY date ASC, id ASC', [code]),
   add: (db, record) => {
-    return db.prepare(`INSERT INTO operation_log (date, code, op_type, amount, shares, daily_profit, fund_profit, notes)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(record.date, record.code, record.opType || 'none', record.amount || 0,
-        record.shares || 0, record.dailyProfit || 0, record.fundProfit || 0, record.notes || '');
+    _execute(db, `INSERT INTO operation_log (date, code, op_type, amount, shares, daily_profit, fund_profit, notes)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [record.date, record.code, record.opType || 'none', record.amount || 0,
+       record.shares || 0, record.dailyProfit || 0, record.fundProfit || 0, record.notes || '']);
   },
-  remove: (db, id) => db.prepare('DELETE FROM operation_log WHERE id = ?').run(id)
+  remove: (db, id) => _execute(db, 'DELETE FROM operation_log WHERE id = ?', [id])
 };
 
-// ==================== Fund Allocations ====================
+// ── Fund Allocations ──────────────────────────────
 const fundAllocations = {
-  all: (db) => db.prepare('SELECT * FROM fund_allocations ORDER BY target_pct DESC').all(),
+  all: (db) => _queryAll(db, 'SELECT * FROM fund_allocations ORDER BY target_pct DESC'),
   upsertAll: (db, allocs) => {
-    const stmt = db.prepare(`INSERT INTO fund_allocations (code, name, target_pct) VALUES (?, ?, ?)
-      ON CONFLICT(code) DO UPDATE SET name=excluded.name, target_pct=excluded.target_pct`);
-    const insertMany = db.transaction((rows) => {
-      for (const a of rows) { stmt.run(a.code, a.name || '', a.targetPct || 0); }
-    });
-    insertMany(allocs);
+    for (const a of allocs) {
+      _execute(db, 'INSERT OR REPLACE INTO fund_allocations (code, name, target_pct) VALUES (?, ?, ?)',
+        [a.code, a.name || '', a.targetPct || 0]);
+    }
   }
 };
 
-// ==================== Settings ====================
+// ── Settings ──────────────────────────────────────
 const settings = {
-  get: (db, key) => {
-    const row = db.prepare('SELECT value FROM app_settings WHERE key = ?').get(key);
-    return row ? row.value : null;
-  },
+  get: (db, key) => { const r = _queryOne(db, 'SELECT value FROM app_settings WHERE key = ?', [key]); return r ? r.value : null; },
   set: (db, key, value) => {
-    db.prepare('INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
-      .run(key, typeof value === 'string' ? value : JSON.stringify(value));
+    _execute(db, 'INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)',
+      [key, typeof value === 'string' ? value : JSON.stringify(value)]);
   },
   all: (db) => {
-    const rows = db.prepare('SELECT * FROM app_settings').all();
-    const obj = {};
-    rows.forEach(r => { obj[r.key] = r.value; });
-    return obj;
+    const rows = _queryAll(db, 'SELECT * FROM app_settings');
+    const obj = {}; rows.forEach(r => { obj[r.key] = r.value; }); return obj;
   }
 };
 
-// ==================== Preclose Advice ====================
+// ── Preclose Advice ───────────────────────────────
 const preclose = {
   getToday: (db) => {
     const today = new Date().toISOString().slice(0, 10);
-    return db.prepare('SELECT * FROM preclose_advice WHERE date = ?').get(today);
+    return _queryOne(db, 'SELECT * FROM preclose_advice WHERE date = ?', [today]);
   },
   setToday: (db, data) => {
     const today = new Date().toISOString().slice(0, 10);
-    db.prepare('INSERT INTO preclose_advice (date, data_json) VALUES (?, ?) ON CONFLICT(date) DO UPDATE SET data_json=excluded.data_json')
-      .run(today, JSON.stringify(data));
+    _execute(db, 'INSERT OR REPLACE INTO preclose_advice (date, data_json, created_at) VALUES (?, ?, ?)',
+      [today, JSON.stringify(data), Date.now()]);
   }
 };
 
-// ==================== Fund News ====================
+// ── Fund News ─────────────────────────────────────
 const fundNews = {
   byCode: (db, code, limit = 10) =>
-    db.prepare('SELECT * FROM fund_news WHERE code = ? ORDER BY date DESC LIMIT ?').all(code, limit),
-  upsertAll: (db, newsItems) => {
-    const stmt = db.prepare(`INSERT OR IGNORE INTO fund_news (code, title, date, sentiment, url)
-      VALUES (?, ?, ?, ?, ?)`);
-    const insertMany = db.transaction((rows) => {
-      for (const n of rows) { stmt.run(n.code, n.title, n.date, n.sentiment, n.url || ''); }
-    });
-    insertMany(newsItems);
+    _queryAll(db, 'SELECT * FROM fund_news WHERE code = ? ORDER BY date DESC LIMIT ?', [code, limit]),
+  upsertAll: (db, items) => {
+    for (const n of items) {
+      _execute(db, 'INSERT OR IGNORE INTO fund_news (code, title, date, sentiment, url) VALUES (?, ?, ?, ?, ?)',
+        [n.code, n.title, n.date, n.sentiment, n.url || '']);
+    }
   },
   cleanup: (db, keepDays = 30) => {
     const cutoff = new Date(Date.now() - keepDays * 86400000).toISOString().slice(0, 10);
-    db.prepare('DELETE FROM fund_news WHERE date < ?').run(cutoff);
+    _execute(db, 'DELETE FROM fund_news WHERE date < ?', [cutoff]);
   }
 };
 
-// ==================== Token Log ====================
+// ── Token Log ─────────────────────────────────────
 const tokenLog = {
   add: (db, entry) => {
-    db.prepare(`INSERT INTO token_log (date, code, fund_name, model, prompt_tokens, completion_tokens, total_tokens, result, success, error)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(entry.date, entry.code, entry.fundName || '', entry.model || 'deepseek-chat',
-        entry.promptTokens || 0, entry.completionTokens || 0, entry.totalTokens || 0,
-        (entry.result || '').slice(0, 200), entry.success ? 1 : 0, (entry.error || '').slice(0, 500));
+    _execute(db, `INSERT INTO token_log (date, code, fund_name, model, prompt_tokens, completion_tokens, total_tokens, result, success, error)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [entry.date, entry.code, entry.fundName || '', entry.model || 'deepseek-chat',
+       entry.promptTokens || 0, entry.completionTokens || 0, entry.totalTokens || 0,
+       (entry.result || '').slice(0, 200), entry.success ? 1 : 0, (entry.error || '').slice(0, 500)]);
   },
   stats: (db) => {
-    return db.prepare(`SELECT COUNT(*) as totalCalls, SUM(CASE WHEN success THEN 1 ELSE 0 END) as successCalls,
-      SUM(CASE WHEN success THEN 0 ELSE 1 END) as failCalls,
-      COALESCE(SUM(total_tokens),0) as totalTokens,
-      COALESCE(SUM(prompt_tokens),0) as totalPrompt, COALESCE(SUM(completion_tokens),0) as totalCompletion
-      FROM token_log`).get();
+    return _queryOne(db, `SELECT COUNT(*) as totalCalls, COALESCE(SUM(CASE WHEN success THEN 1 ELSE 0 END),0) as successCalls,
+      COALESCE(SUM(CASE WHEN success THEN 0 ELSE 1 END),0) as failCalls,
+      COALESCE(SUM(total_tokens),0) as totalTokens, COALESCE(SUM(prompt_tokens),0) as totalPrompt,
+      COALESCE(SUM(completion_tokens),0) as totalCompletion FROM token_log`) || {};
   },
-  all: (db) => db.prepare('SELECT * FROM token_log ORDER BY timestamp DESC LIMIT 100').all()
+  all: (db) => _queryAll(db, 'SELECT * FROM token_log ORDER BY timestamp DESC LIMIT 100')
 };
 
-module.exports = {
-  watchlist, positions, marketCache, aiCalcLog, aiDecisions,
+module.exports = { watchlist, positions, marketCache, aiCalcLog, aiDecisions,
   monthlyBudget, operationLog, fundAllocations, settings,
-  preclose, fundNews, tokenLog
-};
+  preclose, fundNews, tokenLog };

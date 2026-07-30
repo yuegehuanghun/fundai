@@ -1,190 +1,158 @@
 /**
- * SQLite 数据库初始化 — 与前端 IndexedDB schema 一一对应
- * 运行: node db/init.js
+ * SQLite 数据库初始化 — 使用 sql.js（纯 JS WASM，无需原生编译）
+ * sql.js 在内存中运行 SQLite，定期持久化到磁盘文件
  */
-const Database = require('better-sqlite3');
+const initSqlJs = require('sql.js');
+const fs = require('fs');
 const path = require('path');
 
 const DB_PATH = path.join(__dirname, '..', '..', 'data', 'fundai.db');
 
-function initDB() {
-  const db = new Database(DB_PATH);
-  db.pragma('journal_mode = WAL');
-  db.pragma('foreign_keys = ON');
+async function initDB() {
+  // 确保 data 目录存在
+  const dataDir = path.dirname(DB_PATH);
+  if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
 
-  db.exec(`
-    -- 自选基金清单 (对应 IndexedDB watchlist, keyPath=code)
+  // 加载 sql.js WASM
+  const SQL = await initSqlJs();
+
+  // 尝试从磁盘加载已有数据库
+  let db;
+  if (fs.existsSync(DB_PATH)) {
+    try {
+      const fileBuffer = fs.readFileSync(DB_PATH);
+      db = new SQL.Database(fileBuffer);
+      console.log('[DB] 从磁盘加载已有数据库');
+    } catch (e) {
+      console.warn('[DB] 数据库文件损坏，创建新库:', e.message);
+      db = new SQL.Database();
+    }
+  } else {
+    db = new SQL.Database();
+    console.log('[DB] 创建新数据库');
+  }
+
+  // 建表（IF NOT EXISTS 保证幂等）
+  db.run('PRAGMA journal_mode = OFF'); // sql.js 不需要 WAL
+  db.run('PRAGMA foreign_keys = ON');
+
+  db.run(`
     CREATE TABLE IF NOT EXISTS watchlist (
-      code        TEXT PRIMARY KEY NOT NULL CHECK(length(code) = 6),
-      name        TEXT NOT NULL DEFAULT '',
-      added_at    INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
-    );
-
-    -- 持仓数据 (对应 IndexedDB positions, keyPath=code)
+      code TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL DEFAULT '',
+      added_at INTEGER NOT NULL DEFAULT 0
+    )
+  `);
+  db.run(`
     CREATE TABLE IF NOT EXISTS positions (
-      code            TEXT PRIMARY KEY NOT NULL REFERENCES watchlist(code),
-      shares          REAL NOT NULL DEFAULT 0 CHECK(shares >= 0),
-      cost_price      REAL NOT NULL DEFAULT 0 CHECK(cost_price >= 0),
-      total_invested  REAL NOT NULL DEFAULT 0 CHECK(total_invested >= 0),
-      updated_at      INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
-    );
-
-    -- 行情缓存 (对应 IndexedDB marketCache, keyPath=code)
+      code TEXT PRIMARY KEY NOT NULL, shares REAL NOT NULL DEFAULT 0,
+      cost_price REAL NOT NULL DEFAULT 0, total_invested REAL NOT NULL DEFAULT 0,
+      updated_at INTEGER NOT NULL DEFAULT 0
+    )
+  `);
+  db.run(`
     CREATE TABLE IF NOT EXISTS market_cache (
-      code                TEXT PRIMARY KEY NOT NULL REFERENCES watchlist(code),
-      name                TEXT NOT NULL DEFAULT '',
-      nav                 REAL NOT NULL DEFAULT 0,
-      nav_close           REAL NOT NULL DEFAULT 0,
-      estimate_nav        REAL NOT NULL DEFAULT 0,
-      change_pct          REAL NOT NULL DEFAULT 0,
-      estimate_time       TEXT NOT NULL DEFAULT '',
-      nav_date            TEXT NOT NULL DEFAULT '',
-      nav_freshness       TEXT NOT NULL DEFAULT 'close',
-      is_today_nav        INTEGER NOT NULL DEFAULT 0,
-      valuation_percentile REAL,
-      recent_navs_json    TEXT NOT NULL DEFAULT '[]',
-      news_json           TEXT NOT NULL DEFAULT '[]',
-      news_sentiment      REAL NOT NULL DEFAULT 50,
-      source              TEXT NOT NULL DEFAULT 'unknown',
-      update_time         INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
-    );
-
-    -- AI 每日结论归档 (对应 IndexedDB aiDecisions, keyPath=id autoIncrement)
+      code TEXT PRIMARY KEY NOT NULL, name TEXT DEFAULT '', nav REAL DEFAULT 0,
+      nav_close REAL DEFAULT 0, estimate_nav REAL DEFAULT 0, change_pct REAL DEFAULT 0,
+      estimate_time TEXT DEFAULT '', nav_date TEXT DEFAULT '',
+      nav_freshness TEXT DEFAULT 'close', is_today_nav INTEGER DEFAULT 0,
+      valuation_percentile REAL, recent_navs_json TEXT DEFAULT '[]',
+      news_json TEXT DEFAULT '[]', news_sentiment REAL DEFAULT 50,
+      source TEXT DEFAULT 'unknown', update_time INTEGER DEFAULT 0
+    )
+  `);
+  db.run(`
     CREATE TABLE IF NOT EXISTS ai_decisions (
-      id                    INTEGER PRIMARY KEY AUTOINCREMENT,
-      date                  TEXT NOT NULL,
-      code                  TEXT NOT NULL,
-      name                  TEXT NOT NULL DEFAULT '',
-      timestamp             INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-      valuation_score       REAL NOT NULL DEFAULT 0,
-      profit_loss_score     REAL NOT NULL DEFAULT 0,
-      trend_score           REAL NOT NULL DEFAULT 0,
-      news_score            REAL NOT NULL DEFAULT 0,
-      total_score           REAL NOT NULL DEFAULT 0,
-      buy_pct               REAL NOT NULL DEFAULT 0,
-      hold_pct              REAL NOT NULL DEFAULT 0,
-      sell_pct              REAL NOT NULL DEFAULT 0,
-      recommendation        TEXT NOT NULL DEFAULT '',
-      action                TEXT NOT NULL DEFAULT 'hold',
-      valuation_percentile  REAL,
-      profit_pct            REAL NOT NULL DEFAULT 0,
-      change_pct            REAL NOT NULL DEFAULT 0,
-      news_summary          TEXT NOT NULL DEFAULT '',
-      nav                   REAL NOT NULL DEFAULT 0,
-      missing_dims_json     TEXT NOT NULL DEFAULT '[]',
-      degraded              INTEGER NOT NULL DEFAULT 0,
-      highlight             INTEGER NOT NULL DEFAULT 0,
-      notify                INTEGER NOT NULL DEFAULT 0,
+      id INTEGER PRIMARY KEY AUTOINCREMENT, date TEXT NOT NULL, code TEXT NOT NULL,
+      name TEXT DEFAULT '', timestamp INTEGER DEFAULT 0,
+      valuation_score REAL DEFAULT 0, profit_loss_score REAL DEFAULT 0,
+      trend_score REAL DEFAULT 0, news_score REAL DEFAULT 0, total_score REAL DEFAULT 0,
+      buy_pct REAL DEFAULT 0, hold_pct REAL DEFAULT 0, sell_pct REAL DEFAULT 0,
+      recommendation TEXT DEFAULT '', action TEXT DEFAULT 'hold',
+      valuation_percentile REAL, profit_pct REAL DEFAULT 0, change_pct REAL DEFAULT 0,
+      news_summary TEXT DEFAULT '', nav REAL DEFAULT 0,
+      missing_dims_json TEXT DEFAULT '[]', degraded INTEGER DEFAULT 0,
+      highlight INTEGER DEFAULT 0, notify INTEGER DEFAULT 0,
       UNIQUE(date, code)
-    );
-    CREATE INDEX IF NOT EXISTS idx_ai_decisions_date ON ai_decisions(date);
-    CREATE INDEX IF NOT EXISTS idx_ai_decisions_code ON ai_decisions(code);
-
-    -- 月度资金 (对应 IndexedDB monthlyBudget, keyPath=yearMonth)
+    )
+  `);
+  db.run(`
     CREATE TABLE IF NOT EXISTS monthly_budget (
-      year_month        TEXT PRIMARY KEY NOT NULL,
-      total_budget      REAL NOT NULL DEFAULT 0,
-      used_amount       REAL NOT NULL DEFAULT 0,
-      remaining_amount  REAL NOT NULL DEFAULT 0,
-      max_daily_pct     INTEGER NOT NULL DEFAULT 30,
-      created_at        INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-      updated_at        INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
-    );
-
-    -- 操作台账 (对应 IndexedDB operationLog, keyPath=id autoIncrement)
+      year_month TEXT PRIMARY KEY NOT NULL, total_budget REAL DEFAULT 0,
+      used_amount REAL DEFAULT 0, remaining_amount REAL DEFAULT 0,
+      max_daily_pct INTEGER DEFAULT 30, created_at INTEGER DEFAULT 0, updated_at INTEGER DEFAULT 0
+    )
+  `);
+  db.run(`
     CREATE TABLE IF NOT EXISTS operation_log (
-      id            INTEGER PRIMARY KEY AUTOINCREMENT,
-      date          TEXT NOT NULL,
-      code          TEXT NOT NULL,
-      op_type       TEXT NOT NULL DEFAULT 'none',
-      amount        REAL NOT NULL DEFAULT 0,
-      shares        REAL NOT NULL DEFAULT 0,
-      daily_profit  REAL NOT NULL DEFAULT 0,
-      fund_profit   REAL NOT NULL DEFAULT 0,
-      notes         TEXT NOT NULL DEFAULT '',
-      created_at    INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
-    );
-    CREATE INDEX IF NOT EXISTS idx_operation_log_date ON operation_log(date);
-    CREATE INDEX IF NOT EXISTS idx_operation_log_code ON operation_log(code);
-
-    -- 每日净值快照 (对应 IndexedDB aiCalcLog, keyPath=id)
+      id INTEGER PRIMARY KEY AUTOINCREMENT, date TEXT NOT NULL, code TEXT NOT NULL,
+      op_type TEXT DEFAULT 'none', amount REAL DEFAULT 0, shares REAL DEFAULT 0,
+      daily_profit REAL DEFAULT 0, fund_profit REAL DEFAULT 0, notes TEXT DEFAULT '',
+      created_at INTEGER DEFAULT 0
+    )
+  `);
+  db.run(`
     CREATE TABLE IF NOT EXISTS ai_calc_log (
-      id          TEXT PRIMARY KEY NOT NULL,
-      date        TEXT NOT NULL,
-      code        TEXT NOT NULL,
-      nav         REAL NOT NULL DEFAULT 0,
-      nav_date    TEXT NOT NULL DEFAULT '',
-      shares      REAL NOT NULL DEFAULT 0,
-      nav_source  TEXT NOT NULL DEFAULT 'nav',
-      source      TEXT NOT NULL DEFAULT '',
-      daily_pnl   REAL NOT NULL DEFAULT 0,
-      daily_pct   REAL NOT NULL DEFAULT 0,
-      created_at  INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
-    );
-    CREATE INDEX IF NOT EXISTS idx_ai_calc_log_date ON ai_calc_log(date);
-    CREATE INDEX IF NOT EXISTS idx_ai_calc_log_code ON ai_calc_log(code);
-
-    -- 目标持仓配置 (对应 AppSettings.fundAllocations)
+      id TEXT PRIMARY KEY NOT NULL, date TEXT NOT NULL, code TEXT NOT NULL,
+      nav REAL DEFAULT 0, nav_date TEXT DEFAULT '', shares REAL DEFAULT 0,
+      nav_source TEXT DEFAULT 'nav', source TEXT DEFAULT '',
+      daily_pnl REAL DEFAULT 0, daily_pct REAL DEFAULT 0, created_at INTEGER DEFAULT 0
+    )
+  `);
+  db.run(`
     CREATE TABLE IF NOT EXISTS fund_allocations (
-      code        TEXT PRIMARY KEY NOT NULL REFERENCES watchlist(code),
-      name        TEXT NOT NULL DEFAULT '',
-      target_pct  REAL NOT NULL DEFAULT 0 CHECK(target_pct >= 0 AND target_pct <= 100)
-    );
-
-    -- 系统设置键值对 (对应 AppSettings)
+      code TEXT PRIMARY KEY NOT NULL, name TEXT DEFAULT '',
+      target_pct REAL DEFAULT 0
+    )
+  `);
+  db.run(`
     CREATE TABLE IF NOT EXISTS app_settings (
-      key   TEXT PRIMARY KEY NOT NULL,
-      value TEXT NOT NULL DEFAULT ''
-    );
-
-    -- 收盘前建议缓存 (对应 localStorage fundai_preclose_advice)
+      key TEXT PRIMARY KEY NOT NULL, value TEXT DEFAULT ''
+    )
+  `);
+  db.run(`
     CREATE TABLE IF NOT EXISTS preclose_advice (
-      date        TEXT PRIMARY KEY NOT NULL,
-      data_json   TEXT NOT NULL DEFAULT '{}',
-      created_at  INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
-    );
-
-    -- 资讯缓存 (新增：服务端抓取的基金资讯)
+      date TEXT PRIMARY KEY NOT NULL, data_json TEXT DEFAULT '{}',
+      created_at INTEGER DEFAULT 0
+    )
+  `);
+  db.run(`
     CREATE TABLE IF NOT EXISTS fund_news (
-      id          INTEGER PRIMARY KEY AUTOINCREMENT,
-      code        TEXT NOT NULL,
-      title       TEXT NOT NULL DEFAULT '',
-      date        TEXT NOT NULL DEFAULT '',
-      sentiment   REAL NOT NULL DEFAULT 50,
-      url         TEXT NOT NULL DEFAULT '',
-      created_at  INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
-    );
-    CREATE INDEX IF NOT EXISTS idx_fund_news_code ON fund_news(code);
-    CREATE INDEX IF NOT EXISTS idx_fund_news_date ON fund_news(date);
-
-    -- Token 消耗台账 (对应 localStorage fundai_deepseek_token_log)
+      id INTEGER PRIMARY KEY AUTOINCREMENT, code TEXT NOT NULL,
+      title TEXT DEFAULT '', date TEXT DEFAULT '', sentiment REAL DEFAULT 50,
+      url TEXT DEFAULT '', created_at INTEGER DEFAULT 0
+    )
+  `);
+  db.run(`
     CREATE TABLE IF NOT EXISTS token_log (
-      id                INTEGER PRIMARY KEY AUTOINCREMENT,
-      timestamp         INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-      date              TEXT NOT NULL,
-      code              TEXT NOT NULL,
-      fund_name         TEXT NOT NULL DEFAULT '',
-      model             TEXT NOT NULL DEFAULT 'deepseek-chat',
-      prompt_tokens     INTEGER NOT NULL DEFAULT 0,
-      completion_tokens INTEGER NOT NULL DEFAULT 0,
-      total_tokens      INTEGER NOT NULL DEFAULT 0,
-      result            TEXT NOT NULL DEFAULT '',
-      success           INTEGER NOT NULL DEFAULT 1,
-      error             TEXT NOT NULL DEFAULT ''
-    );
+      id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp INTEGER DEFAULT 0,
+      date TEXT NOT NULL, code TEXT NOT NULL, fund_name TEXT DEFAULT '',
+      model TEXT DEFAULT 'deepseek-chat', prompt_tokens INTEGER DEFAULT 0,
+      completion_tokens INTEGER DEFAULT 0, total_tokens INTEGER DEFAULT 0,
+      result TEXT DEFAULT '', success INTEGER DEFAULT 1, error TEXT DEFAULT ''
+    )
   `);
 
-  console.log('[DB] SQLite 初始化完成:', DB_PATH);
+  // 创建索引
+  ['ai_decisions','operation_log','ai_calc_log','fund_news'].forEach(t => {
+    try { db.run(`CREATE INDEX IF NOT EXISTS idx_${t}_date ON ${t}(date)`); } catch {}
+    try { db.run(`CREATE INDEX IF NOT EXISTS idx_${t}_code ON ${t}(code)`); } catch {}
+  });
+
+  console.log('[DB] sql.js 数据库就绪');
   return db;
 }
 
-// 直接运行时初始化
-if (require.main === module) {
-  const db = initDB();
-  console.log('[DB] 表结构:');
-  const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all();
-  tables.forEach(t => console.log('  -', t.name));
-  db.close();
+/** 持久化到磁盘（每次写操作后调用） */
+function saveToDisk(db) {
+  try {
+    const data = db.export();
+    const buffer = Buffer.from(data);
+    const dataDir = path.dirname(DB_PATH);
+    if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
+    fs.writeFileSync(DB_PATH, buffer);
+  } catch (e) {
+    console.error('[DB] 持久化失败:', e.message);
+  }
 }
 
-module.exports = { initDB, DB_PATH };
+module.exports = { initDB, saveToDisk, DB_PATH };
