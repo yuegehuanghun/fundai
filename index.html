@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>基金 AI 助手 — 智能加减仓决策</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <div class="app-container">
+    <!-- ========== 顶栏 ========== -->
+    <header class="top-bar">
+      <div class="top-bar__title">📈 基金<span>AI</span>助手 <span id="project-badge" style="font-size:0.6rem;background:#4f46e5;color:#fff;padding:2px 7px;border-radius:10px;vertical-align:middle;display:none;">Shop</span></div>
+      <div class="top-bar__right">
+        <div class="top-bar__status">
+          <span class="status-dot" id="status-dot"></span>
+          <span id="status-text">检测中...</span>
+        </div>
+        <span id="update-time" style="font-size:0.78rem;color:var(--text-muted);"></span>
+        <button class="btn btn--refresh" id="btn-refresh" onclick="manualRefresh()" title="手动刷新行情数据">
+          <span class="refresh-icon">🔄</span> 刷新
+        </button>
+      </div>
+    </header>
+
+    <!-- ========== Tab 导航 ========== -->
+    <nav class="tab-nav">
+      <button class="tab-nav__item active" data-tab="dashboard" onclick="switchTab('dashboard')">📊 持仓看板</button>
+      <button class="tab-nav__item" data-tab="budget" onclick="switchTab('budget')">💰 月度资金</button>
+      <button class="tab-nav__item" data-tab="record" onclick="switchTab('record')">📝 操作录入</button>
+      <button class="tab-nav__item" data-tab="history" onclick="switchTab('history')">📋 台账复盘</button>
+      <button class="tab-nav__item" data-tab="settings" onclick="switchTab('settings')">⚙️ 设置</button>
+    </nav>
+
+    <!-- ========== Tab 1: 持仓看板 ========== -->
+    <section class="tab-content active" id="tab-dashboard">
+      <div style="text-align:center;padding:60px;color:var(--text-muted);">
+        <div style="font-size:2rem;margin-bottom:10px;">⏳</div>
+        <div>正在加载数据...</div>
+      </div>
+    </section>
+
+    <!-- ========== Tab 2: 月度资金 ========== -->
+    <section class="tab-content" id="tab-budget">
+      <div style="text-align:center;padding:60px;color:var(--text-muted);">
+        <div style="font-size:2rem;margin-bottom:10px;">💰</div>
+        <div>正在加载...</div>
+      </div>
+    </section>
+
+    <!-- ========== Tab 3: 操作录入 ========== -->
+    <section class="tab-content" id="tab-record">
+      <div style="text-align:center;padding:60px;color:var(--text-muted);">
+        <div style="font-size:2rem;margin-bottom:10px;">📝</div>
+        <div>正在加载...</div>
+      </div>
+    </section>
+
+    <!-- ========== Tab 4: 台账复盘 ========== -->
+    <section class="tab-content" id="tab-history">
+      <div style="text-align:center;padding:60px;color:var(--text-muted);">
+        <div style="font-size:2rem;margin-bottom:10px;">📋</div>
+        <div>正在加载...</div>
+      </div>
+    </section>
+
+    <!-- ========== Tab 5: 设置 ========== -->
+    <section class="tab-content" id="tab-settings">
+      <div style="text-align:center;padding:60px;color:var(--text-muted);">
+        <div style="font-size:2rem;margin-bottom:10px;">⚙️</div>
+        <div>正在加载...</div>
+      </div>
+    </section>
+  </div>
+
+  <!-- ========== 隐藏的文件导入 input ========== -->
+  <input type="file" id="import-file-input" accept=".json" style="display:none;" onchange="handleImportFile(event)">
+
+  <!-- ========== JS 模块（按依赖顺序加载） ========== -->
+  <script src="js/storage.js"></script>
+  <script src="js/fund-api.js"></script>
+  <script src="js/fund-lookup.js"></script>
+  <script src="js/ai-engine.js"></script>
+  <script src="js/pnl.js"></script>
+  <script src="js/nav.js"></script>
+  <script src="js/budget.js"></script>
+  <script src="js/operations.js"></script>
+  <script src="js/deepseek.js"></script>
+  <script src="js/ui.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

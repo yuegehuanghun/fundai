@@ -1,0 +1,19 @@
+{
+  "name": "fundai-backend",
+  "version": "1.0.0",
+  "description": "FundAI 薄后端 — 定时任务、资讯抓取、DeepSeek 代理、数据持久化",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "db:init": "node db/init.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.0.0",
+    "express": "^4.21.0",
+    "node-cron": "^3.0.3",
+    "node-fetch": "^2.7.0",
+    "dotenv": "^16.4.0",
+    "cors": "^2.8.5"
+  }
+}
