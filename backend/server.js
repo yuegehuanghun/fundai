@@ -21,27 +21,48 @@ const { initDB } = require('./db/init');
 const { router, withDB } = require('./routes/api');
 const { startScheduler } = require('./scheduler');
 
+const fs = require('fs');
 const PORT = process.env.PORT || 3000;
 
+// ─── 确保 data 目录存在 ───────────────────────────
+const dataDir = path.join(__dirname, '..', 'data');
+if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
+
 // ─── 数据库初始化 ──────────────────────────────────
-const db = initDB();
-console.log('[Server] SQLite 数据库就绪');
+let db;
+try {
+  db = initDB();
+  console.log('[Server] SQLite 数据库就绪');
+} catch (e) {
+  console.error('[Server] SQLite 初始化失败:', e.message);
+  console.error('[Server] 将以无数据库模式运行（API 不可用）');
+}
 
 // ─── Express 配置 ─────────────────────────────────
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ─── 静态文件（前端） ──────────────────────────────
-// 生产环境: 前端文件放在 ../ 即 shop 根目录
-app.use(express.static(path.join(__dirname, '..')));
+// ─── 诊断端点（无数据库依赖） ─────────────────────
+app.get('/api/ping', (req, res) => {
+  res.json({ pong: true, time: Date.now(), dbOk: !!db });
+});
 
 // ─── API 路由（注入 db） ──────────────────────────
-app.use('/api', withDB(db), router);
+if (db) {
+  app.use('/api', withDB(db), router);
+} else {
+  app.use('/api', (req, res) => {
+    res.status(503).json({ error: '数据库未就绪，API 暂不可用', dbError: true });
+  });
+}
 
-// ─── SPA 回退: 所有非 API 请求返回 index.html ─────
+// ─── 静态文件（前端） ──────────────────────────────
+app.use(express.static(path.join(__dirname, '..')));
+
+// ─── SPA 回退 ─────────────────────────────────────
 app.get('*', (req, res) => {
-  if (req.path.startsWith('/api')) return res.status(404).json({ error: 'Not found' });
+  if (req.path.startsWith('/api')) return;
   res.sendFile(path.join(__dirname, '..', 'index.html'));
 });
 
