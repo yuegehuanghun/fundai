@@ -98,9 +98,9 @@ function startScheduler(db) {
       // 3. 获取指数 PE
       let indexPE = null;
       try {
-        const resp = await require('node-fetch')(
+        const resp = await fetch(
           'https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=1.000300&fields1=f1,f2,f3,f4&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61&klt=101&fqt=0&end=20500000&lmt=2000',
-          { timeout: 8000 }
+          { signal: AbortSignal.timeout(8000) }
         );
         const text = await resp.text();
         const match = text.match(/^\w+\((.+)\)\s*$/);

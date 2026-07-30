@@ -1,15 +1,15 @@
 /**
  * 服务端基金数据采集 — HTTP 直接请求，无需 JSONP，不存在 CORS 问题
  * 数据源: 天天基金 + 东方财富 + 新浪
+ * 使用 Node.js 18+ 内置 fetch，无需额外依赖
  */
-const fetch = require('node-fetch');
 
 // ==================== 天天基金实时估值 ====================
 // 前端用 <script> JSONP 注入，服务端直接 GET JS 文本解析 jsonpgz({...})
 async function fetchTianTian(code) {
   try {
     const url = `https://fundgz.1234567.com.cn/js/${code}.js?rt=${Date.now()}`;
-    const resp = await fetch(url, { timeout: 8000 });
+    const resp = await fetch(url, { signal: AbortSignal.timeout(8000) });
     if (!resp.ok) return null;
     const text = await resp.text();
     const match = text.match(/jsonpgz\((\{.*\})\)/);
@@ -51,7 +51,7 @@ async function fetchTianTian(code) {
 async function fetchEastMoneyHistory(code) {
   try {
     const url = `https://fund.eastmoney.com/pingzhongdata/${code}.js?v=${Date.now()}`;
-    const resp = await fetch(url, { timeout: 6000 });
+    const resp = await fetch(url, { signal: AbortSignal.timeout(6000) });
     if (!resp.ok) return null;
     const text = await resp.text();
 
@@ -89,7 +89,7 @@ async function fetchFundNewsFromEastMoney(code, limit = 10) {
     const url = `https://np-anotice-stock.eastmoney.com/api/security/ann?sr=-1&page_size=${limit}&page_index=1&ann_type=A&client_source=web&stock_list=${code}`;
     const resp = await fetch(url, {
       headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://fund.eastmoney.com/' },
-      timeout: 5000
+      signal: AbortSignal.timeout(5000)
     });
     if (resp.ok) {
       const json = await resp.json();
@@ -105,7 +105,7 @@ async function fetchFundNewsFromEastMoney(code, limit = 10) {
   // 降级：搜索 API
   try {
     const searchUrl = `https://searchapi.eastmoney.com/bussiness/Web/GetCMSSearchResult?type=8196&pageindex=1&pagesize=${limit}&keyword=${code}&name=zixun`;
-    const resp = await fetch(searchUrl, { timeout: 5000 });
+    const resp = await fetch(searchUrl, { signal: AbortSignal.timeout(5000) });
     if (resp.ok) {
       const json = await resp.json();
       if (json && json.Data) {
@@ -179,7 +179,7 @@ async function fetchAllFundData(codes) {
 async function fetchNorthBoundFlow() {
   try {
     const url = 'https://push2his.eastmoney.com/api/qt/kamt.kline/get?fields1=f1,f2,f3,f4&fields2=f51,f52,f53,f54,f55,f56&klt=1&lmt=5';
-    const resp = await fetch(url, { timeout: 5000 });
+    const resp = await fetch(url, { signal: AbortSignal.timeout(5000) });
     if (!resp.ok) return null;
     const text = await resp.text();
     // 解析 JSONP: callback({...})
@@ -217,7 +217,7 @@ async function fetchNorthBoundFlow() {
 async function fetchMarketBenchmark() {
   try {
     const url = 'https://push2delay.eastmoney.com/api/qt/stock/get?secid=1.000300&fields=f43,f47,f48,f50,f57,f58,f60,f169,f170';
-    const resp = await fetch(url, { timeout: 5000 });
+    const resp = await fetch(url, { signal: AbortSignal.timeout(5000) });
     if (!resp.ok) return null;
     const text = await resp.text();
     const match = text.match(/^\w+\((.+)\)\s*$/);
@@ -244,8 +244,8 @@ async function fetchMarketBenchmark() {
 async function fetchSectorStyle() {
   try {
     const [gemResp, sz50Resp] = await Promise.all([
-      fetch('https://push2delay.eastmoney.com/api/qt/stock/get?secid=0.399006&fields=f43,f58,f170', { timeout: 5000 }),
-      fetch('https://push2delay.eastmoney.com/api/qt/stock/get?secid=1.000016&fields=f43,f58,f170', { timeout: 5000 })
+      fetch('https://push2delay.eastmoney.com/api/qt/stock/get?secid=0.399006&fields=f43,f58,f170', { signal: AbortSignal.timeout(5000) }),
+      fetch('https://push2delay.eastmoney.com/api/qt/stock/get?secid=1.000016&fields=f43,f58,f170', { signal: AbortSignal.timeout(5000) })
     ]);
     const parseResp = async (resp) => {
       const text = await resp.text();
@@ -277,7 +277,7 @@ async function fetchSectorStyle() {
 async function fetchMarketBreadth() {
   try {
     const url = 'https://push2delay.eastmoney.com/api/qt/stock/get?secid=1.000001&fields=f43,f47,f50,f58,f60,f170';
-    const resp = await fetch(url, { timeout: 5000 });
+    const resp = await fetch(url, { signal: AbortSignal.timeout(5000) });
     if (!resp.ok) return null;
     const text = await resp.text();
     const match = text.match(/^\w+\((.+)\)\s*$/);

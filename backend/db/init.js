@@ -13,8 +13,8 @@ async function initDB() {
   const dataDir = path.dirname(DB_PATH);
   if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
 
-  // 加载 sql.js WASM
-  const SQL = await initSqlJs();
+  const wasmPath = path.join(__dirname, '..', 'node_modules', 'sql.js', 'dist', 'sql-wasm.wasm');
+  const SQL = await initSqlJs({ locateFile: () => wasmPath });
 
   // 尝试从磁盘加载已有数据库
   let db;

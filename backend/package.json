@@ -12,8 +12,10 @@
     "sql.js": "^1.10.3",
     "express": "^4.21.0",
     "node-cron": "^3.0.3",
-    "node-fetch": "^2.7.0",
     "dotenv": "^16.4.0",
     "cors": "^2.8.5"
+  },
+  "engines": {
+    "node": ">=18"
   }
 }

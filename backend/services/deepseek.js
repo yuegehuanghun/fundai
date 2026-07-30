@@ -1,8 +1,7 @@
 /**
  * DeepSeek API 代理 — API Key 存服务端，前端不可见
- * 支持单基金咨询 + 收盘前批量分析
+ * 使用 Node.js 18+ 内置 fetch
  */
-const fetch = require('node-fetch');
 
 const API_URL = 'https://api.deepseek.com/v1/chat/completions';
 
